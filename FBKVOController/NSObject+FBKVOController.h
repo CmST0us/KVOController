@@ -13,6 +13,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+typedef void(^FBKVOControllerChangeBlock)(id _Nullable oldValue, id _Nullable newValue);
+
 /**
  Category that adds built-in `KVOController` and `KVOControllerNonRetaining` on any instance of `NSObject`.
 
@@ -21,21 +23,26 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @interface NSObject (FBKVOController)
 
-/**
- @abstract Lazy-loaded FBKVOController for use with any object
- @return FBKVOController associated with this object, creating one if necessary
- @discussion This makes it convenient to simply create and forget a FBKVOController, and when this object gets dealloc'd, so will the associated controller and the observation info.
- */
-@property (nonatomic, strong) FBKVOController *KVOController;
+- (void)addKVOObserver:(NSObject *)observer
+            forKeyPath:(NSString *)aKeyPath
+                 block:(FBKVOControllerChangeBlock)block;
 
-/**
- @abstract Lazy-loaded FBKVOController for use with any object
- @return FBKVOController associated with this object, creating one if necessary
- @discussion This makes it convenient to simply create and forget a FBKVOController.
- Use this version when a strong reference between controller and observed object would create a retain cycle.
- When not retaining observed objects, special care must be taken to remove observation info prior to deallocation of the observed object.
- */
-@property (nonatomic, strong) FBKVOController *KVOControllerNonRetaining;
+- (void)addKVOObserver:(NSObject *)observer
+            forKeyPath:(NSString *)aKeyPath
+                action:(SEL)aSelector;
+
+- (void)addKVOObserver:(NSObject *)observer
+           forKeyPaths:(NSArray<NSString *> *)keyPaths
+                 block:(FBKVOControllerChangeBlock)block;
+
+- (void)addKVOObserver:(NSObject *)observer
+           forKeyPaths:(NSArray<NSString *> *)keyPaths
+                action:(SEL)aSelector;
+
+- (void)removeKVOObserver:(NSObject *)observer;
+
+- (void)removeKVOObserver:(NSObject *)observer
+               forKeyPath:(NSString *)aKeyPath;
 
 @end
 

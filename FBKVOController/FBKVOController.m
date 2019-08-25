@@ -82,19 +82,6 @@ static NSString *describe_options(NSKeyValueObservingOptions options)
 
 #pragma mark _FBKVOInfo -
 
-typedef NS_ENUM(uint8_t, _FBKVOInfoState) {
-  _FBKVOInfoStateInitial = 0,
-
-  // whether the observer registration in Foundation has completed
-  _FBKVOInfoStateObserving,
-
-  // whether `unobserve` was called before observer registration in Foundation has completed
-  // this could happen when `NSKeyValueObservingOptionInitial` is one of the NSKeyValueObservingOptions
-  _FBKVOInfoStateNotObserving,
-};
-
-NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
-
 /**
  @abstract The key-value observation info.
  @discussion Object equality is only used within the scope of a controller instance. Safely omit controller from equality definition.
@@ -106,18 +93,19 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
 {
 @public
   __weak FBKVOController *_controller;
+  __weak id _observer;
   NSString *_keyPath;
   NSKeyValueObservingOptions _options;
   SEL _action;
   void *_context;
-  FBKVONotificationBlock _block;
-  _FBKVOInfoState _state;
+  FBKVOControllerChangeBlock _block;
 }
 
 - (instancetype)initWithController:(FBKVOController *)controller
+                          observer:(nullable id)observer
                            keyPath:(NSString *)keyPath
                            options:(NSKeyValueObservingOptions)options
-                             block:(nullable FBKVONotificationBlock)block
+                             block:(nullable FBKVOControllerChangeBlock)block
                             action:(nullable SEL)action
                            context:(nullable void *)context
 {
@@ -129,49 +117,12 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
     _options = options;
     _action = action;
     _context = context;
+    _observer = observer;
   }
   return self;
 }
 
-- (instancetype)initWithController:(FBKVOController *)controller keyPath:(NSString *)keyPath options:(NSKeyValueObservingOptions)options block:(FBKVONotificationBlock)block
-{
-  return [self initWithController:controller keyPath:keyPath options:options block:block action:NULL context:NULL];
-}
-
-- (instancetype)initWithController:(FBKVOController *)controller keyPath:(NSString *)keyPath options:(NSKeyValueObservingOptions)options action:(SEL)action
-{
-  return [self initWithController:controller keyPath:keyPath options:options block:NULL action:action context:NULL];
-}
-
-- (instancetype)initWithController:(FBKVOController *)controller keyPath:(NSString *)keyPath options:(NSKeyValueObservingOptions)options context:(void *)context
-{
-  return [self initWithController:controller keyPath:keyPath options:options block:NULL action:NULL context:context];
-}
-
-- (instancetype)initWithController:(FBKVOController *)controller keyPath:(NSString *)keyPath
-{
-  return [self initWithController:controller keyPath:keyPath options:0 block:NULL action:NULL context:NULL];
-}
-
-- (NSUInteger)hash
-{
-  return [_keyPath hash];
-}
-
-- (BOOL)isEqual:(id)object
-{
-  if (nil == object) {
-    return NO;
-  }
-  if (self == object) {
-    return YES;
-  }
-  if (![object isKindOfClass:[self class]]) {
-    return NO;
-  }
-  return [_keyPath isEqualToString:((_FBKVOInfo *)object)->_keyPath];
-}
-
+/* TODO: Finish This
 - (NSString *)debugDescription
 {
   NSMutableString *s = [NSMutableString stringWithFormat:@"<%@:%p keyPath:%@", NSStringFromClass([self class]), self, _keyPath];
@@ -190,210 +141,7 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
   [s appendString:@">"];
   return s;
 }
-
-@end
-
-#pragma mark _FBKVOSharedController -
-
-/**
- @abstract The shared KVO controller instance.
- @discussion Acts as a receptionist, receiving and forwarding KVO notifications.
- */
-@interface _FBKVOSharedController : NSObject
-
-/** A shared instance that never deallocates. */
-+ (instancetype)sharedController;
-
-/** observe an object, info pair */
-- (void)observe:(id)object info:(nullable _FBKVOInfo *)info;
-
-/** unobserve an object, info pair */
-- (void)unobserve:(id)object info:(nullable _FBKVOInfo *)info;
-
-/** unobserve an object with a set of infos */
-- (void)unobserve:(id)object infos:(nullable NSSet *)infos;
-
-@end
-
-@implementation _FBKVOSharedController
-{
-  NSHashTable<_FBKVOInfo *> *_infos;
-  pthread_mutex_t _mutex;
-}
-
-+ (instancetype)sharedController
-{
-  static _FBKVOSharedController *_controller = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    _controller = [[_FBKVOSharedController alloc] init];
-  });
-  return _controller;
-}
-
-- (instancetype)init
-{
-  self = [super init];
-  if (nil != self) {
-    NSHashTable *infos = [NSHashTable alloc];
-#ifdef __IPHONE_OS_VERSION_MIN_REQUIRED
-    _infos = [infos initWithOptions:NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality capacity:0];
-#elif defined(__MAC_OS_X_VERSION_MIN_REQUIRED)
-    if ([NSHashTable respondsToSelector:@selector(weakObjectsHashTable)]) {
-      _infos = [infos initWithOptions:NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality capacity:0];
-    } else {
-      // silence deprecated warnings
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-      _infos = [infos initWithOptions:NSPointerFunctionsZeroingWeakMemory|NSPointerFunctionsObjectPointerPersonality capacity:0];
-#pragma clang diagnostic pop
-    }
-
-#endif
-    pthread_mutex_init(&_mutex, NULL);
-  }
-  return self;
-}
-
-- (void)dealloc
-{
-  pthread_mutex_destroy(&_mutex);
-}
-
-- (NSString *)debugDescription
-{
-  NSMutableString *s = [NSMutableString stringWithFormat:@"<%@:%p", NSStringFromClass([self class]), self];
-
-  // lock
-  pthread_mutex_lock(&_mutex);
-
-  NSMutableArray *infoDescriptions = [NSMutableArray arrayWithCapacity:_infos.count];
-  for (_FBKVOInfo *info in _infos) {
-    [infoDescriptions addObject:info.debugDescription];
-  }
-
-  [s appendFormat:@" contexts:%@", infoDescriptions];
-
-  // unlock
-  pthread_mutex_unlock(&_mutex);
-
-  [s appendString:@">"];
-  return s;
-}
-
-- (void)observe:(id)object info:(nullable _FBKVOInfo *)info
-{
-  if (nil == info) {
-    return;
-  }
-
-  // register info
-  pthread_mutex_lock(&_mutex);
-  [_infos addObject:info];
-  pthread_mutex_unlock(&_mutex);
-
-  // add observer
-  [object addObserver:self forKeyPath:info->_keyPath options:info->_options context:(void *)info];
-
-  if (info->_state == _FBKVOInfoStateInitial) {
-    info->_state = _FBKVOInfoStateObserving;
-  } else if (info->_state == _FBKVOInfoStateNotObserving) {
-    // this could happen when `NSKeyValueObservingOptionInitial` is one of the NSKeyValueObservingOptions,
-    // and the observer is unregistered within the callback block.
-    // at this time the object has been registered as an observer (in Foundation KVO),
-    // so we can safely unobserve it.
-    [object removeObserver:self forKeyPath:info->_keyPath context:(void *)info];
-  }
-}
-
-- (void)unobserve:(id)object info:(nullable _FBKVOInfo *)info
-{
-  if (nil == info) {
-    return;
-  }
-
-  // unregister info
-  pthread_mutex_lock(&_mutex);
-  [_infos removeObject:info];
-  pthread_mutex_unlock(&_mutex);
-
-  // remove observer
-  if (info->_state == _FBKVOInfoStateObserving) {
-    [object removeObserver:self forKeyPath:info->_keyPath context:(void *)info];
-  }
-  info->_state = _FBKVOInfoStateNotObserving;
-}
-
-- (void)unobserve:(id)object infos:(nullable NSSet<_FBKVOInfo *> *)infos
-{
-  if (0 == infos.count) {
-    return;
-  }
-
-  // unregister info
-  pthread_mutex_lock(&_mutex);
-  for (_FBKVOInfo *info in infos) {
-    [_infos removeObject:info];
-  }
-  pthread_mutex_unlock(&_mutex);
-
-  // remove observer
-  for (_FBKVOInfo *info in infos) {
-    if (info->_state == _FBKVOInfoStateObserving) {
-      [object removeObserver:self forKeyPath:info->_keyPath context:(void *)info];
-    }
-    info->_state = _FBKVOInfoStateNotObserving;
-  }
-}
-
-- (void)observeValueForKeyPath:(nullable NSString *)keyPath
-                      ofObject:(nullable id)object
-                        change:(nullable NSDictionary<NSKeyValueChangeKey, id> *)change
-                       context:(nullable void *)context
-{
-  NSAssert(context, @"missing context keyPath:%@ object:%@ change:%@", keyPath, object, change);
-
-  _FBKVOInfo *info;
-
-  {
-    // lookup context in registered infos, taking out a strong reference only if it exists
-    pthread_mutex_lock(&_mutex);
-    info = [_infos member:(__bridge id)context];
-    pthread_mutex_unlock(&_mutex);
-  }
-
-  if (nil != info) {
-
-    // take strong reference to controller
-    FBKVOController *controller = info->_controller;
-    if (nil != controller) {
-
-      // take strong reference to observer
-      id observer = controller.observer;
-      if (nil != observer) {
-
-        // dispatch custom block or action, fall back to default action
-        if (info->_block) {
-          NSDictionary<NSKeyValueChangeKey, id> *changeWithKeyPath = change;
-          // add the keyPath to the change dictionary for clarity when mulitple keyPaths are being observed
-          if (keyPath) {
-            NSMutableDictionary<NSString *, id> *mChange = [NSMutableDictionary dictionaryWithObject:keyPath forKey:FBKVONotificationKeyPathKey];
-            [mChange addEntriesFromDictionary:change];
-            changeWithKeyPath = [mChange copy];
-          }
-          info->_block(observer, object, changeWithKeyPath);
-        } else if (info->_action) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-          [observer performSelector:info->_action withObject:change withObject:object];
-#pragma clang diagnostic pop
-        } else {
-          [observer observeValueForKeyPath:keyPath ofObject:object change:change context:info->_context];
-        }
-      }
-    }
-  }
-}
+*/
 
 @end
 
@@ -401,7 +149,9 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
 
 @implementation FBKVOController
 {
-  NSMapTable<id, NSMutableSet<_FBKVOInfo *> *> *_objectInfosMap;
+  /// keyPath作为Key, 监听参数数组作为Value，用于改进FBController不能在多处监听的问题;
+  NSMutableDictionary<NSString *, NSMutableArray<_FBKVOInfo *> *> *_objectInfosMap;
+  NSMutableArray <NSString *> *_observedKeyPath;
   pthread_mutex_t _lock;
 }
 
@@ -412,21 +162,16 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
   return [[self alloc] initWithObserver:observer];
 }
 
-- (instancetype)initWithObserver:(nullable id)observer retainObserved:(BOOL)retainObserved
+- (instancetype)initWithObserver:(nullable id)observer
 {
   self = [super init];
   if (nil != self) {
-    _observer = observer;
-    NSPointerFunctionsOptions keyOptions = retainObserved ? NSPointerFunctionsStrongMemory|NSPointerFunctionsObjectPointerPersonality : NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality;
-    _objectInfosMap = [[NSMapTable alloc] initWithKeyOptions:keyOptions valueOptions:NSPointerFunctionsStrongMemory|NSPointerFunctionsObjectPersonality capacity:0];
+    _sender = observer;
+    _observedKeyPath = [[NSMutableArray alloc] init];
+    _objectInfosMap = [[NSMutableDictionary alloc] init];
     pthread_mutex_init(&_lock, NULL);
   }
   return self;
-}
-
-- (instancetype)initWithObserver:(nullable id)observer
-{
-  return [self initWithObserver:observer retainObserved:YES];
 }
 
 - (void)dealloc
@@ -437,6 +182,7 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
 
 #pragma mark Properties -
 
+/* TODO: Finish This!
 - (NSString *)debugDescription
 {
   NSMutableString *s = [NSMutableString stringWithFormat:@"<%@:%p", NSStringFromClass([self class]), self];
@@ -464,66 +210,62 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
   [s appendString:@">"];
   return s;
 }
+*/
 
 #pragma mark Utilities -
 
-- (void)_observe:(id)object info:(_FBKVOInfo *)info
+- (void)_observeInfo:(_FBKVOInfo *)info
 {
+  if (info->_observer == nil) return;
+  
   // lock
   pthread_mutex_lock(&_lock);
 
-  NSMutableSet *infos = [_objectInfosMap objectForKey:object];
-
-  // check for info existence
-  _FBKVOInfo *existingInfo = [infos member:info];
-  if (nil != existingInfo) {
-    // observation info already exists; do not observe it again
-
-    // unlock and return
-    pthread_mutex_unlock(&_lock);
-    return;
+  /// 先拿keyPath
+  NSString *keyPath = [info->_keyPath copy];
+  // 判断当前keyPath是否已经监听
+  if (![_observedKeyPath containsObject:keyPath]) {
+    // 当前keyPath如果没有监听的话加到系统KVO监听列表里面
+    [_sender addObserver:self forKeyPath:keyPath options:info->_options context:info->_context];
+    [_observedKeyPath addObject:keyPath];
   }
-
-  // lazilly create set of infos
-  if (nil == infos) {
-    infos = [NSMutableSet set];
-    [_objectInfosMap setObject:infos forKey:object];
+  
+  // 取回当前监听信息列表
+  NSMutableArray *observerMap = [_objectInfosMap valueForKey:keyPath];
+  if (observerMap == nil) {
+    observerMap = [[NSMutableArray alloc] initWithObjects:info, nil];
+    [_objectInfosMap setObject:observerMap forKey:keyPath];
   }
-
-  // add info and oberve
-  [infos addObject:info];
-
-  // unlock prior to callout
+  
+  // 将当前监听信息加入到监听列表中
+  [observerMap addObject:info];
   pthread_mutex_unlock(&_lock);
-
-  [[_FBKVOSharedController sharedController] observe:object info:info];
 }
 
-- (void)_unobserve:(id)object info:(_FBKVOInfo *)info
-{
+- (void)_unobserveWithKeyPath:(NSString *)keyPath
+                     observer:(id)object {
   // lock
   pthread_mutex_lock(&_lock);
-
-  // get observation infos
-  NSMutableSet *infos = [_objectInfosMap objectForKey:object];
-
-  // lookup registered info instance
-  _FBKVOInfo *registeredInfo = [infos member:info];
-
-  if (nil != registeredInfo) {
-    [infos removeObject:registeredInfo];
-
-    // remove no longer used infos
-    if (0 == infos.count) {
-      [_objectInfosMap removeObjectForKey:object];
-    }
+  
+  /// 判断keyPath是否在监听列表里
+  if ([_observedKeyPath containsObject:keyPath]) {
+    /// 在监听列表则移除
+    [_observedKeyPath removeObject:keyPath];
+    [_sender removeObserver:self forKeyPath:keyPath];
   }
+  
+  /// 遍历搜索keyPath的所有监听者, 如果是object则移除
+  NSMutableArray<_FBKVOInfo *> *infos = [_objectInfosMap valueForKey:keyPath];
+  NSMutableArray *deletedInfo = [NSMutableArray array];
+  [infos enumerateObjectsUsingBlock:^(_FBKVOInfo * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+    if (obj->_observer == object) {
+      [deletedInfo addObject:obj];
+    }
+  }];
+  [infos removeObjectsInArray:deletedInfo];
 
   // unlock
   pthread_mutex_unlock(&_lock);
-
-  // unobserve
-  [[_FBKVOSharedController sharedController] unobserve:object info:registeredInfo];
 }
 
 - (void)_unobserve:(id)object
@@ -531,16 +273,19 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
   // lock
   pthread_mutex_lock(&_lock);
 
-  NSMutableSet *infos = [_objectInfosMap objectForKey:object];
-
-  // remove infos
-  [_objectInfosMap removeObjectForKey:object];
+  /// 遍历监听信息，拿到监听者的info
+  [_objectInfosMap enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull key, NSMutableArray<_FBKVOInfo *> * _Nonnull obj, BOOL * _Nonnull stop) {
+    NSMutableArray *deletedObject = [NSMutableArray array];
+    [obj enumerateObjectsUsingBlock:^(_FBKVOInfo * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+      if (obj->_observer == object) {
+        [deletedObject addObject:obj];
+      }
+    }];
+    [obj removeObjectsInArray:deletedObject];
+  }];
 
   // unlock
   pthread_mutex_unlock(&_lock);
-
-  // unobserve
-  [[_FBKVOSharedController sharedController] unobserve:object infos:infos];
 }
 
 - (void)_unobserveAll
@@ -548,41 +293,35 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
   // lock
   pthread_mutex_lock(&_lock);
 
-  NSMapTable *objectInfoMaps = [_objectInfosMap copy];
-
-  // clear table and map
+  __weak typeof(self) weakSelf = self;
+  [_observedKeyPath enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+    [_sender removeObserver:weakSelf forKeyPath:obj];
+  }];
+  
   [_objectInfosMap removeAllObjects];
-
+  [_observedKeyPath removeAllObjects];
+  
   // unlock
   pthread_mutex_unlock(&_lock);
-
-  _FBKVOSharedController *shareController = [_FBKVOSharedController sharedController];
-
-  for (id object in objectInfoMaps) {
-    // unobserve each registered object and infos
-    NSSet *infos = [objectInfoMaps objectForKey:object];
-    [shareController unobserve:object infos:infos];
-  }
 }
 
 #pragma mark API -
 
-- (void)observe:(nullable id)object keyPath:(NSString *)keyPath options:(NSKeyValueObservingOptions)options block:(FBKVONotificationBlock)block
+- (void)observer:(nullable id)object keyPath:(NSString *)keyPath block:(FBKVOControllerChangeBlock)block
 {
-  NSAssert(0 != keyPath.length && NULL != block, @"missing required parameters observe:%@ keyPath:%@ block:%p", object, keyPath, block);
+  NSAssert(0 != keyPath.length && NULL != block, @"missing required parameters observer:%@ keyPath:%@ block:%p", object, keyPath, block);
   if (nil == object || 0 == keyPath.length || NULL == block) {
     return;
   }
 
   // create info
-  _FBKVOInfo *info = [[_FBKVOInfo alloc] initWithController:self keyPath:keyPath options:options block:block];
-
+  _FBKVOInfo *info = [[_FBKVOInfo alloc] initWithController:self observer:object keyPath:keyPath options:NSKeyValueObservingOptionOld | NSKeyValueObservingOptionNew block:block action:nil context:nil];
   // observe object with info
-  [self _observe:object info:info];
+  [self _observeInfo:info];
 }
 
 
-- (void)observe:(nullable id)object keyPaths:(NSArray<NSString *> *)keyPaths options:(NSKeyValueObservingOptions)options block:(FBKVONotificationBlock)block
+- (void)observer:(nullable id)object keyPaths:(NSArray<NSString *> *)keyPaths block:(FBKVOControllerChangeBlock)block
 {
   NSAssert(0 != keyPaths.count && NULL != block, @"missing required parameters observe:%@ keyPath:%@ block:%p", object, keyPaths, block);
   if (nil == object || 0 == keyPaths.count || NULL == block) {
@@ -590,71 +329,42 @@ NSString *const FBKVONotificationKeyPathKey = @"FBKVONotificationKeyPathKey";
   }
 
   for (NSString *keyPath in keyPaths) {
-    [self observe:object keyPath:keyPath options:options block:block];
+    [self observer:object keyPath:keyPath block:block];
   }
 }
 
-- (void)observe:(nullable id)object keyPath:(NSString *)keyPath options:(NSKeyValueObservingOptions)options action:(SEL)action
+- (void)observer:(nullable id)object keyPath:(NSString *)keyPath action:(SEL)action
 {
   NSAssert(0 != keyPath.length && NULL != action, @"missing required parameters observe:%@ keyPath:%@ action:%@", object, keyPath, NSStringFromSelector(action));
-  NSAssert([_observer respondsToSelector:action], @"%@ does not respond to %@", _observer, NSStringFromSelector(action));
+  NSAssert([_sender respondsToSelector:action], @"%@ does not respond to %@", _sender, NSStringFromSelector(action));
   if (nil == object || 0 == keyPath.length || NULL == action) {
     return;
   }
 
   // create info
-  _FBKVOInfo *info = [[_FBKVOInfo alloc] initWithController:self keyPath:keyPath options:options action:action];
+  _FBKVOInfo *info = [[_FBKVOInfo alloc] initWithController:self observer:object keyPath:keyPath options:NSKeyValueObservingOptionOld | NSKeyValueObservingOptionNew block:nil action:action context:nil];
 
   // observe object with info
-  [self _observe:object info:info];
+  [self _observeInfo:info];
 }
 
 - (void)observe:(nullable id)object keyPaths:(NSArray<NSString *> *)keyPaths options:(NSKeyValueObservingOptions)options action:(SEL)action
 {
   NSAssert(0 != keyPaths.count && NULL != action, @"missing required parameters observe:%@ keyPath:%@ action:%@", object, keyPaths, NSStringFromSelector(action));
-  NSAssert([_observer respondsToSelector:action], @"%@ does not respond to %@", _observer, NSStringFromSelector(action));
+  NSAssert([_sender respondsToSelector:action], @"%@ does not respond to %@", _sender, NSStringFromSelector(action));
   if (nil == object || 0 == keyPaths.count || NULL == action) {
     return;
   }
 
   for (NSString *keyPath in keyPaths) {
-    [self observe:object keyPath:keyPath options:options action:action];
-  }
-}
-
-- (void)observe:(nullable id)object keyPath:(NSString *)keyPath options:(NSKeyValueObservingOptions)options context:(nullable void *)context
-{
-  NSAssert(0 != keyPath.length, @"missing required parameters observe:%@ keyPath:%@", object, keyPath);
-  if (nil == object || 0 == keyPath.length) {
-    return;
-  }
-
-  // create info
-  _FBKVOInfo *info = [[_FBKVOInfo alloc] initWithController:self keyPath:keyPath options:options context:context];
-
-  // observe object with info
-  [self _observe:object info:info];
-}
-
-- (void)observe:(nullable id)object keyPaths:(NSArray<NSString *> *)keyPaths options:(NSKeyValueObservingOptions)options context:(nullable void *)context
-{
-  NSAssert(0 != keyPaths.count, @"missing required parameters observe:%@ keyPath:%@", object, keyPaths);
-  if (nil == object || 0 == keyPaths.count) {
-    return;
-  }
-
-  for (NSString *keyPath in keyPaths) {
-    [self observe:object keyPath:keyPath options:options context:context];
+    [self observer:object keyPath:keyPath action:action];
   }
 }
 
 - (void)unobserve:(nullable id)object keyPath:(NSString *)keyPath
 {
-  // create representative info
-  _FBKVOInfo *info = [[_FBKVOInfo alloc] initWithController:self keyPath:keyPath];
-
   // unobserve object property
-  [self _unobserve:object info:info];
+  [self _unobserveWithKeyPath:keyPath observer:object];
 }
 
 - (void)unobserve:(nullable id)object
