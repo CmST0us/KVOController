@@ -323,7 +323,7 @@ static NSString *describe_options(NSKeyValueObservingOptions options)
 
 - (void)observer:(nullable id)object keyPaths:(NSArray<NSString *> *)keyPaths block:(FBKVOControllerChangeBlock)block
 {
-  NSAssert(0 != keyPaths.count && NULL != block, @"missing required parameters observe:%@ keyPath:%@ block:%p", object, keyPaths, block);
+  NSAssert(0 != keyPaths.count && NULL != block, @"missing required parameters observer:%@ keyPath:%@ block:%p", object, keyPaths, block);
   if (nil == object || 0 == keyPaths.count || NULL == block) {
     return;
   }
@@ -336,7 +336,7 @@ static NSString *describe_options(NSKeyValueObservingOptions options)
 - (void)observer:(nullable id)object keyPath:(NSString *)keyPath action:(SEL)action
 {
   NSAssert(0 != keyPath.length && NULL != action, @"missing required parameters observe:%@ keyPath:%@ action:%@", object, keyPath, NSStringFromSelector(action));
-  NSAssert([_sender respondsToSelector:action], @"%@ does not respond to %@", _sender, NSStringFromSelector(action));
+  NSAssert([object respondsToSelector:action], @"%@ does not respond to %@", object, NSStringFromSelector(action));
   if (nil == object || 0 == keyPath.length || NULL == action) {
     return;
   }
@@ -351,7 +351,7 @@ static NSString *describe_options(NSKeyValueObservingOptions options)
 - (void)observer:(nullable id)object keyPaths:(NSArray<NSString *> *)keyPaths action:(SEL)action
 {
   NSAssert(0 != keyPaths.count && NULL != action, @"missing required parameters observe:%@ keyPath:%@ action:%@", object, keyPaths, NSStringFromSelector(action));
-  NSAssert([_sender respondsToSelector:action], @"%@ does not respond to %@", _sender, NSStringFromSelector(action));
+  NSAssert([object respondsToSelector:action], @"%@ does not respond to %@", object, NSStringFromSelector(action));
   if (nil == object || 0 == keyPaths.count || NULL == action) {
     return;
   }
